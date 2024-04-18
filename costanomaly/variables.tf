@@ -7,7 +7,7 @@ variable "AWSAccountName" {
 variable "Email" {
   description = "This is the email of Cloud Architecture Team that will be alerted"
   type        = string
-  default     = "cloudarc@L3Harris.com"
+  default     = ""
 }
 
 variable "CustomerEmail" {
