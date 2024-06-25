@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This template is used to setup AWS Transfer family using SFTP endpoint.
+
+Resources:
+
+  SFTPServerS3Bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub sftp-s3-${AWS::AccountId}-bucket
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'AES256'
+            BucketKeyEnabled: true
+      Tags:
+        - Key: Application
+          Value: sftp-server
+
+  SFTPServer:
+    Type: AWS::Transfer::Server
+    DependsOn:
+         - "CloudWatchLoggingRole"
+    Properties:
+      EndpointType: PUBLIC
+      Protocols: 
+        - SFTP
+      IdentityProviderType: SERVICE_MANAGED
+      Domain: S3
+      LoggingRole: 
+        Fn::GetAtt: CloudWatchLoggingRole.Arn
+      Tags:
+        - Key: Application
+          Value: sftp-transfer
+
+  CloudWatchLoggingRole:
+    Description: IAM role used by Transfer to log API requests to CloudWatch
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sftp-logging-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - transfer.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: TransferLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/transfer/*"
+      Tags:
+        - Key: Name
+          Value: sftp-server-role
+
+  SftpUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sftp-user-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - transfer.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: ReferenceArchitectureAllowS3ListingAndLocation
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketLocation
+                Resource: "*"
+        - PolicyName: ReferenceArchitectureAllowListingOfUserFolder
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt SFTPServerS3Bucket.Arn
+        - PolicyName: ReferenceArchitectureAllowAccessToUserBuckets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub "${SFTPServerS3Bucket.Arn}/*"
+
+  SftpUser:
+    Type: AWS::Transfer::User
+    Properties:
+      ServerId: !GetAtt SFTPServer.ServerId
+      UserName: Ade.Ibironke
+      HomeDirectory: !Sub "/${SFTPServerS3Bucket}/home/Ade.Ibironke"
+      Policy: >
+          {
+            "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AllowListingOfUserFolder",
+                            "Effect": "Allow",
+                            "Action": "s3:ListBucket",
+                            "Resource": "arn:aws:s3:::${transfer:HomeBucket}",
+                            "Condition": {
+                                "StringLike": {
+                                    "s3:prefix": [
+                                        "home/${transfer:UserName}/*",
+                                        "home/${transfer:UserName}"
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "Sid": "HomeDirObjectAccess",
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:PutObject",
+                                "s3:GetObject",
+                                "s3:GetObjectVersion",
+                                "s3:DeleteObject",
+                                "s3:DeleteObjectVersion"
+                            ],
+                            "Resource": "arn:aws:s3:::${transfer:HomeDirectory}*"
+                        }
+                    ]
+            }
+      Role: !GetAtt SftpUserRole.Arn
+      SshPublicKeys:
+        - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCN8oSCSzoKSfcJctbUofI1DCudU8dMb55VniNadLb6ZdSBv3VwlHH3eVt4BPiUk5W26WFia/NrMNd4RDoc8O2cHR/a1UtW1ZzaASEogN4fs31jkvY5C04hS/Bc0G1iEdzpeGGKZU/sChf2CvkxyyHQ7jz05/YbhhUlIMd+aJLiqdykX8U1yj0g4OzbGGb2L5nPRQefYlUkZcA3S6HinGt3gbT81VpbdFpdmFk6kIenemwBV8hci6MR9bVpvJ40r/Ed5mSZvRH1Rab9Qtpy/J0l1p6XgBl+BeleBi32v2FNjp/F3hX0qUaDxiWAB6YHSlZJWqVGcSm0RgL1u/2SDv8b
+      Tags:
+        - Key: Application
+          Value: sftp-server
